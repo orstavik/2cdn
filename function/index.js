@@ -9,21 +9,28 @@ const storage = require('@google-cloud/storage')();
 const bucketId = 'two-cdn-gzip-content';
 
 exports.twoCdn = (req, resp) => {
+  // TODO: implement cors preflight handling
+  // https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS
+  // console.log(req.method, req.headers);
+  // if (req.method === 'OPTIONS') {
+  //   resp.addHeader('Access-Control-Allow-Origin', req.headers.origin);
+  //   resp.addHeader('Access-Control-Allow-Headers', req.headers['access-control-request-headers']);
+  //   resp.addHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+  //   resp.addHeader('Vary', 'Origin');
+  // }
   const link = url.parse(req.url, true);
   const sortedQuery = alphabetizeQuery(link.query);
   const sortedPath = link.pathname + sortedQuery;
-  const type = TYPE[link.pathname.split('.').pop()];
+  const ext = link.pathname.split('.').pop();
   const bucket = storage.bucket(bucketId);
   const bucketFile = bucket.file(sortedPath);
 
   bucketFile.exists().then((exists) => {
     if (exists[0]) {
-      resp.setHeader('Content-Type', type);
-      resp.setHeader('Vary', 'Accept-Encoding');
-      resp.setHeader('Cache-Control', 'public, max-age=31536000, s-maxage=31536000, immutable');
       if (req.headers['accept-encoding'] && req.headers['accept-encoding'].indexOf('gzip') === -1) {
         bucketFile.createReadStream()
           .on('response', (bucketResp) => {
+            setHeaders(resp, ext, -1, false);
             // this length is zipped not unzipped!
             // resp.setHeader('Content-Length', bucketResp.headers['content-length']);
           })
@@ -35,10 +42,9 @@ exports.twoCdn = (req, resp) => {
           .pipe(gunzip)
           .pipe(resp);
       } else {
-        resp.setHeader('Content-Encoding', 'gzip');
         bucketFile.createReadStream()
           .on('response', (bucketResp) => {
-            resp.setHeader('Content-Length', bucketResp.headers['content-length']);
+            setHeaders(resp, ext, bucketResp.headers['content-length'], true);
           })
           .on('error', (err) => {
             resp.statusCode = 500;
@@ -48,31 +54,23 @@ exports.twoCdn = (req, resp) => {
           .pipe(resp);
       }
     } else {
-      resp.setHeader('Content-Type', type);
-      resp.setHeader('Content-Disposition', 'inline');
       https.get('https:/' + link.path, (newRes) => {
         if (newRes.statusCode === 200) {
-          const size = newRes.headers['content-length'];
-          resp.setHeader('Content-Length', size);
           const writeStream = bucketFile.createWriteStream({
             gzip: true,
             public: false,
             metadata: {
-              contentType: type,
+              contentType: TYPE[ext],
               contentDisposition: 'inline'
             }
-          }).on('error', (err) => {
-            resp.statusCode = 500;
-            resp.write(resp.statusCode + ': ' + err.message);
-            resp.end();
-            writeStream.end();
           }).on('finish', () => {
             bucketFile.setMetadata({
               contentEncoding: ''
             });
           });
-          newRes.pipe(resp);
           newRes.pipe(writeStream);
+          setHeaders(resp, ext, newRes.headers['content-length'], false);
+          newRes.pipe(resp);
         } else {
           resp.statusCode === newRes.statusCode;
           resp.write(resp.statusCode + ': ' + newRes.statusMessage);
@@ -114,6 +112,18 @@ const TYPE = {
   json: 'application/json',
   map: 'application/octet-stream'
 }
+
+function setHeaders(resp, extention, bodySize, gzip) {
+  const type = TYPE[extention] || 'text/plain';
+  resp.setHeader('Content-Type', type);
+  if (bodySize >= 0)
+    resp.setHeader('Content-Length', bodySize);
+  resp.setHeader('Access-Control-Allow-Origin', '*');
+  resp.setHeader('Vary', 'Accept-Encoding');
+  resp.setHeader('Cache-Control', 'public, max-age=31536000, s-maxage=31536000, immutable');
+  if (gzip)
+    resp.setHeader('Content-Encoding', 'gzip');
+};
 
 /**
  * ECONOMICAL/TECHNICAL ISSUES
