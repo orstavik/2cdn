@@ -29,7 +29,7 @@ npm install -g @google-cloud/functions-emulator
 functions start
 functions inspect [nameOfYourFunction]
 ```
-If you function will not be automatically registered by the functions emulator when it start you need to add it manually:
+If you function will not be automatically registered by the functions emulator when it starts you need to add it manually:
 ```
 functions deploy [nameOfYourFunction] --trigger-http
 ```
